@@ -365,8 +365,8 @@ bool MosaickingBase::RunTaskForSerial(
           case Status::SURROUNDED: {
             source_borders[j].reset(source_borders[j]->Difference(
                 covered_geometry.get()));
-            for (auto j(mosaicking_layer->GetFeatureCount() - 1); j >= 0; --j) {
-              OGRFeatureUniquePtr feature(mosaicking_layer->GetFeature(j));
+            for (auto k(mosaicking_layer->GetFeatureCount() - 1); k >= 0; --k) {
+              OGRFeatureUniquePtr feature(mosaicking_layer->GetFeature(k));
               if (auto geometry(feature->GetGeometryRef());
                   covered_geometry->Intersect(geometry)) {
                 feature->SetGeometryDirectly(covered_geometry->Intersection(
@@ -374,16 +374,16 @@ bool MosaickingBase::RunTaskForSerial(
                 mosaicking_layer->SetFeature(feature.get());
               } else if (source_borders[j]->Contains(geometry)) {
                 auto last_fid(mosaicking_layer->GetFeatureCount() - 1);
-                mosaicking_layer->DeleteFeature(j);
-                border_layer->DeleteFeature(j);
-                borders_area.erase(borders_area.begin() + j);
-                if (j != last_fid) {
+                mosaicking_layer->DeleteFeature(k);
+                border_layer->DeleteFeature(k);
+                borders_area.erase(borders_area.begin() + k);
+                if (k != last_fid) {
                   feature.reset(mosaicking_layer->GetFeature(last_fid));
-                  feature->SetFID(j);
+                  feature->SetFID(k);
                   mosaicking_layer->DeleteFeature(last_fid);
                   mosaicking_layer->SetFeature(feature.get());
                   feature.reset(border_layer->GetFeature(last_fid));
-                  feature->SetFID(j);
+                  feature->SetFID(k);
                   border_layer->DeleteFeature(last_fid);
                   border_layer->SetFeature(feature.get());
                 }
@@ -393,8 +393,8 @@ bool MosaickingBase::RunTaskForSerial(
           }
           case Status::ANTI_SURROUNDED: {
             source_borders[j] = std::move(new_geometry);
-            for (auto j(mosaicking_layer->GetFeatureCount() - 1); j >= 0; --j) {
-              OGRFeatureUniquePtr feature(mosaicking_layer->GetFeature(j));
+            for (auto k(mosaicking_layer->GetFeatureCount() - 1); k >= 0; --k) {
+              OGRFeatureUniquePtr feature(mosaicking_layer->GetFeature(k));
               if (auto geometry(feature->GetGeometryRef());
                   covered_geometry->Intersect(geometry)) {
                 feature->SetGeometryDirectly(geometry->Difference(
@@ -402,16 +402,16 @@ bool MosaickingBase::RunTaskForSerial(
                 mosaicking_layer->SetFeature(feature.get());
               } else if (source_borders[j]->Contains(geometry)) {
                 auto last_fid(mosaicking_layer->GetFeatureCount() - 1);
-                mosaicking_layer->DeleteFeature(j);
-                border_layer->DeleteFeature(j);
-                borders_area.erase(borders_area.begin() + j);
-                if (j != last_fid) {
+                mosaicking_layer->DeleteFeature(k);
+                border_layer->DeleteFeature(k);
+                borders_area.erase(borders_area.begin() + k);
+                if (k != last_fid) {
                   feature.reset(mosaicking_layer->GetFeature(last_fid));
-                  feature->SetFID(j);
+                  feature->SetFID(k);
                   mosaicking_layer->DeleteFeature(last_fid);
                   mosaicking_layer->SetFeature(feature.get());
                   feature.reset(border_layer->GetFeature(last_fid));
-                  feature->SetFID(j);
+                  feature->SetFID(k);
                   border_layer->DeleteFeature(last_fid);
                   border_layer->SetFeature(feature.get());
                 }
