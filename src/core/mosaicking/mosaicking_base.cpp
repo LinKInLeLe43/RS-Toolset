@@ -211,12 +211,12 @@ bool MosaickingBase::RunTaskForSerial(
       source_border(utils::CreateBorder(
           source_raster_dataset.get(), mosaicking_layer->GetSpatialRef())),
       original_source_border(source_border->clone());
-  if (source_border->toPolygon()->getNumInteriorRings() != 0) {
-    spdlog::warn(
-        "Skipping adding the task "
-        "since the source border has the internal hole(s)");
-    return true;
-  }
+  //if (source_border->toPolygon()->getNumInteriorRings() != 0) {
+  //  spdlog::warn(
+  //      "Skipping adding the task "
+  //      "since the source border has the internal hole(s)");
+  //  return true;
+  //}
   if (OGRGeometryUniquePtr new_covered_polygon(source_border->clone());
       !source_border->Intersect(covered_border)) {
     spdlog::info(
@@ -253,7 +253,7 @@ bool MosaickingBase::RunTaskForSerial(
       }
       for (auto j(0); j < source_borders.size(); ++j) {
         auto subtasks_count(1);
-        if (status == Status::OVERLAP) {
+        if (status != Status::SURROUNDED) {
           OGRGeometryUniquePtr geometry(source_borders[j]->Boundary());
           geometry.reset(geometry->Intersection(covered_polygon));
           if (geometry->getGeometryType() == wkbMultiLineString)
@@ -367,12 +367,21 @@ bool MosaickingBase::RunTaskForSerial(
                 covered_geometry.get()));
             for (auto k(mosaicking_layer->GetFeatureCount() - 1); k >= 0; --k) {
               OGRFeatureUniquePtr feature(mosaicking_layer->GetFeature(k));
-              if (auto geometry(feature->GetGeometryRef());
-                  covered_geometry->Intersect(geometry)) {
-                feature->SetGeometryDirectly(covered_geometry->Intersection(
-                    geometry));
+              if (OGRGeometryUniquePtr geometry(
+                      feature->GetGeometryRef()->clone());
+                  covered_geometry->Intersect(geometry.get())) {
+                geometry.reset(covered_geometry->Intersection(geometry.get()));
+                for (auto s(geometry->toPolygon()->getNumInteriorRings() - 1);
+                    s >= 0; --s) {
+                  OGRGeometryUniquePtr int_geometry(new OGRPolygon);
+                  int_geometry->toPolygon()->addRing(
+                      geometry->toPolygon()->getInteriorRing(s)->clone());
+                  source_borders[j].reset(source_borders[j]->Union(
+                      int_geometry.get()));
+                }
+                feature->SetGeometryDirectly(geometry.release());
                 mosaicking_layer->SetFeature(feature.get());
-              } else if (source_borders[j]->Contains(geometry)) {
+              } else if (source_borders[j]->Contains(geometry.get())) {
                 auto last_fid(mosaicking_layer->GetFeatureCount() - 1);
                 mosaicking_layer->DeleteFeature(k);
                 border_layer->DeleteFeature(k);
@@ -392,28 +401,67 @@ bool MosaickingBase::RunTaskForSerial(
             break;
           }
           case Status::ANTI_SURROUNDED: {
-            source_borders[j] = std::move(new_geometry);
-            for (auto k(mosaicking_layer->GetFeatureCount() - 1); k >= 0; --k) {
-              OGRFeatureUniquePtr feature(mosaicking_layer->GetFeature(k));
-              if (auto geometry(feature->GetGeometryRef());
-                  covered_geometry->Intersect(geometry)) {
-                feature->SetGeometryDirectly(geometry->Difference(
-                    source_borders[j].get()));
-                mosaicking_layer->SetFeature(feature.get());
-              } else if (source_borders[j]->Contains(geometry)) {
-                auto last_fid(mosaicking_layer->GetFeatureCount() - 1);
-                mosaicking_layer->DeleteFeature(k);
-                border_layer->DeleteFeature(k);
-                borders_area.erase(borders_area.begin() + k);
-                if (k != last_fid) {
-                  feature.reset(mosaicking_layer->GetFeature(last_fid));
-                  feature->SetFID(k);
-                  mosaicking_layer->DeleteFeature(last_fid);
+            if (!anti_surrounded) {
+              UpdateResults(
+                  covered_geometry.get(), new_geometry.get(), covered_polygon,
+                  rejection_ratio, source_borders[j], mosaicking_layer,
+                  border_layer, borders_area);
+              break;
+            } else {
+              switch (OGRGeometryUniquePtr diff_geometry(
+                      source_borders[j]->Difference(covered_geometry.get()));
+                  diff_geometry->getGeometryType()) {
+                case wkbPolygon: {
+                  source_borders[j].swap(diff_geometry);
+                  break;
+                }
+                case wkbMultiPolygon: {
+                  for (const auto& diff_polygon :
+                          diff_geometry->toMultiPolygon()) {
+                    if (new_geometry->Intersect(diff_polygon)) {
+                      source_borders[j].reset(diff_polygon->clone());
+                      break;
+                    }
+                  }
+                }
+              }
+              for (auto k(mosaicking_layer->GetFeatureCount() - 1); k >= 0; --k) {
+                OGRFeatureUniquePtr feature(mosaicking_layer->GetFeature(k));
+                if (auto geometry(feature->GetGeometryRef());
+                    covered_geometry->Intersect(geometry)) {
+                  switch (OGRGeometryUniquePtr diff_geometry(geometry->Difference(
+                          source_borders[j].get()));
+                      diff_geometry->getGeometryType()) {
+                    case wkbPolygon: {
+                      feature->SetGeometryDirectly(diff_geometry.release());
+                      break;
+                    }
+                    case wkbMultiPolygon: {
+                      for (const auto& diff_polygon :
+                              diff_geometry->toMultiPolygon()) {
+                        if (covered_geometry->Intersect(diff_polygon)) {
+                          feature->SetGeometryDirectly(diff_polygon->clone());
+                          break;
+                        }
+                      }
+                    }
+                  }
                   mosaicking_layer->SetFeature(feature.get());
-                  feature.reset(border_layer->GetFeature(last_fid));
-                  feature->SetFID(k);
-                  border_layer->DeleteFeature(last_fid);
-                  border_layer->SetFeature(feature.get());
+                } else if (source_borders[j]->Contains(geometry)) {
+                  auto last_fid(mosaicking_layer->GetFeatureCount() - 1);
+                  mosaicking_layer->DeleteFeature(k);
+                  border_layer->DeleteFeature(k);
+                  borders_area.erase(borders_area.begin() + k);
+                  if (k != last_fid) {
+                    feature.reset(mosaicking_layer->GetFeature(last_fid));
+                    feature->SetFID(k);
+                    mosaicking_layer->DeleteFeature(last_fid);
+                    mosaicking_layer->SetFeature(feature.get());
+                    feature.reset(border_layer->GetFeature(last_fid));
+                    feature->SetFID(k);
+                    border_layer->DeleteFeature(last_fid);
+                    border_layer->SetFeature(feature.get());
+                  }
                 }
               }
             }
@@ -716,10 +764,7 @@ bool MosaickingBase::InitializeOverlapGeometries(
     std::vector<OGRGeometryUniquePtr>& new_overlap_geometries,
     std::vector<OGRGeometryUniquePtr>& source_borders,
     Status& status) {
-  OGRGeometryUniquePtr covered_outer_polygon(new OGRPolygon);
-  covered_outer_polygon->toPolygon()->addRingDirectly(
-      covered_polygon->getExteriorRing()->clone());
-  if (source_border->Contains(covered_outer_polygon.get())) {
+  if (source_border->Contains(covered_polygon)) {
     spdlog::debug("Initializing overlap geometries in the surrounded case");
     status = Status::SURROUNDED;
     covered_overlap_geometries.emplace_back(covered_polygon->clone());
@@ -731,8 +776,8 @@ bool MosaickingBase::InitializeOverlapGeometries(
         new_overlap_geometries[0].get()));
     new_overlap_geometries[0].reset(new_overlap_geometries[0]->Difference(
         geometry.get()));
-  } else if (covered_outer_polygon->Contains(source_border.get())) {
-    if (covered_polygon->Contains(source_border.get()) && !anti_surrounded) {
+  } else if (covered_polygon->Contains(source_border.get())) {
+    if (!anti_surrounded) {
       spdlog::info(
           "Skipping adding the task "
           "since the covered border contains the source border");
@@ -1051,9 +1096,9 @@ bool MosaickingBase::UpdateMediums(
         if (serial) {
           OGRGeometryUniquePtr 
               buffered_covered_geometry(covered_overlap_geometry->Simplify(
-                  5.0 * geotrans[1])),
+                  2.0 * geotrans[1])),
               buffered_new_geometry(new_overlap_geometry->Simplify(
-                  5.0 * geotrans[1]));
+                  2.0 * geotrans[1]));
           buffered_covered_geometry.reset(buffered_covered_geometry->Buffer(
               5.0 * geotrans[1])),
           buffered_new_geometry.reset(buffered_new_geometry->Buffer(
@@ -1074,7 +1119,7 @@ bool MosaickingBase::UpdateMediums(
     return true;
   } else {
     spdlog::debug("Updating the overlap geometries");
-    seamline.reset(seamline->Simplify(5 * geotrans[1]));
+    seamline.reset(seamline->Simplify(2.0 * geotrans[1]));
     double buffer_at_end(serial ? 2.0 : 0.0);
     OGRGeometryUniquePtr geometry1(nullptr), geometry2(nullptr);
     do {
@@ -1082,7 +1127,7 @@ bool MosaickingBase::UpdateMediums(
       OGRGeometryUniquePtr intersection_geometry(seamline->Buffer(
           (buffers_[idx] - buffer_at_end) * geotrans[1]));
       intersection_geometry.reset(intersection_geometry->Simplify(
-          5 * geotrans[1]));
+          2.0 * geotrans[1]));
       intersection_geometry.reset(intersection_geometry->Intersection(
           valid_geometry));
       OGRGeometryUniquePtr union_geometry(intersection_geometry->Buffer(
@@ -1098,8 +1143,8 @@ bool MosaickingBase::UpdateMediums(
         geometry1.reset(geometry1->Buffer(buffer_at_end * geotrans[1]));
         geometry2.reset(geometry2->Buffer(buffer_at_end * geotrans[1]));
       }
-      if (geometry1->toPolygon()->getNumInteriorRings() == 0 &&
-          geometry2->toPolygon()->getNumInteriorRings() == 0) {
+      if (!overlap || (geometry1->toPolygon()->getNumInteriorRings() == 0 &&
+          geometry2->toPolygon()->getNumInteriorRings() == 0)) {
         covered_overlap_geometry.swap(geometry1);
         new_overlap_geometry.swap(geometry2);
         spdlog::debug("Updating the overlap geometries - done");
@@ -1132,15 +1177,13 @@ void MosaickingBase::UpdateResults(
       break;
     }
     case wkbMultiPolygon: {
-      source_border.reset(source_border->Difference(covered_polygon));
-      if (source_border->getGeometryType() == wkbMultiPolygon)
-        utils::ExtractBiggestPolygon(source_border);
-      for (const auto& geometry : diff_geometry->toMultiPolygon()) {
-        if (geometry->Intersect(new_geometry)) {
-          source_border.reset(source_border->Union(geometry));
-          break;
-        }
+      auto _diff_geometry(diff_geometry->toMultiPolygon());
+      for (auto i(_diff_geometry->getNumGeometries() - 1); i >= 0; --i) {
+        if (!new_geometry->Intersect(_diff_geometry->getGeometryRef(i)))
+          _diff_geometry->removeGeometry(i);
       }
+      utils::ExtractBiggestPolygon(diff_geometry);
+      source_border.swap(diff_geometry);
     }
   }
   spdlog::info("Updating the source border - done");

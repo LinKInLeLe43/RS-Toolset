@@ -218,20 +218,30 @@ bool GraphCutImpl::ExecuteMosaicking(
   if (label0_geometries.empty() || !label1_max_geometry.first) return false;
 
   label1_geometry = std::move(label1_max_geometry.first);
-  if (swap)
+  bool _swap(false);
+  if (label0_geometries.size() == 1) {
+    OGRGeometryUniquePtr geometry(new OGRPolygon);
+    geometry->toPolygon()->addRing(
+        label0_geometries.front().first->toPolygon()->getExteriorRing());
+    if (geometry->Contains(label1_geometry.get()))
+      _swap = true;
+  }
+  if (_swap)
     label0_geometries.front().first.swap(label1_geometry);
   for (auto it(label0_geometries.rbegin()); it != label0_geometries.rend();
       it++) {
     auto _label0_geometry(it->first->toPolygon());
     for (int i(_label0_geometry->getNumInteriorRings() - 1); i >= 0; --i)
       _label0_geometry->removeRing(i + 1);
-    label1_geometry.reset(it->first->Union(label1_geometry.get()));
-    auto _label1_geometry(label1_geometry->toPolygon());
-    for (int i(_label1_geometry->getNumInteriorRings() - 1); i >= 0; --i)
-      _label1_geometry->removeRing(i + 1);
-    label1_geometry.reset(label1_geometry->Difference(it->first.get()));
+    if (label1_geometry->Intersect(it->first.get())) {
+      label1_geometry.reset(it->first->Union(label1_geometry.get()));
+      auto _label1_geometry(label1_geometry->toPolygon());
+      for (int i(_label1_geometry->getNumInteriorRings() - 1); i >= 0; --i)
+        _label1_geometry->removeRing(i + 1);
+      label1_geometry.reset(label1_geometry->Difference(it->first.get()));
+    }
   }
-  if (swap)
+  if (_swap)
     label0_geometries.front().first.swap(label1_geometry);
   if (subtasks_count == 0) {
     label0_geometry = std::move(label0_geometries.front().first);
