@@ -1128,6 +1128,15 @@ bool MosaickingBase::UpdateMediums(
           (buffers_[idx] - buffer_at_end) * geotrans[1]));
       intersection_geometry.reset(intersection_geometry->Simplify(
           2.0 * geotrans[1]));
+      if (OGRGeometryUniquePtr
+              diff_geometry1(covered_overlap_geometry->Difference(
+                  intersection_geometry.get())),
+              diff_geometry2(new_overlap_geometry->Difference(
+                  intersection_geometry.get()));
+          diff_geometry1->getGeometryType() != wkbPolygon ||
+          diff_geometry2->getGeometryType() != wkbPolygon) {
+        continue;
+      }
       intersection_geometry.reset(intersection_geometry->Intersection(
           valid_geometry));
       OGRGeometryUniquePtr union_geometry(intersection_geometry->Buffer(
@@ -1150,8 +1159,7 @@ bool MosaickingBase::UpdateMediums(
         spdlog::debug("Updating the overlap geometries - done");
         return true;
       }
-      idx--;
-    } while (idx >= 0);
+    } while (--idx >= 0);
     spdlog::info(
         "Stopping the operation early since the overlap geometreis still have "
         "the internal hole(s) with the least buffer {}", buffers_[0]);
