@@ -870,8 +870,8 @@ void MosaickingBase::CreateOverlapDatasets(
   range[0] = static_cast<int>(floor(x));
   range[1] = static_cast<int>(floor(y));
   GDALApplyGeoTransform(inv_geotrans, enve.MaxX, enve.MinY, &x, &y);
-  range[2] = static_cast<int>(ceil((x - range[0]) / factor));
-  range[3] = static_cast<int>(ceil((y - range[1]) / factor));
+  range[2] = std::max(static_cast<int>(ceil((x - range[0]) / factor)), 1);
+  range[3] = std::max(static_cast<int>(ceil((y - range[1]) / factor)), 1);
   GDALApplyGeoTransform(
       geotrans, range[0], range[1], union_geotrans, union_geotrans + 3);
   auto spatial_ref(mosaicking_layer->GetSpatialRef());
